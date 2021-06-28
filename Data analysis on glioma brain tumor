@@ -1,0 +1,186 @@
+---
+title: "final exam gda: data analysis on glioma brain tumor"
+author: "Debora Lehmann"
+date: "28 6 2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(affy)
+library(affydata)
+library(affyPLM)
+library(limma)
+library(cluster)
+library(stats)
+library(gplots)
+library(xtable)
+
+data <- ReadAffy(celfile.path = "C:/Users/debor/Desktop/EPFL/MA2/statistics for genomic data analysis/final exam/feld")
+
+nbrs <- seq(1:58)
+colnames(exprs(data)) <- nbrs
+```
+
+#_______ quality assessment ______
+```{r quality assessment, echo=TRUE}
+
+pset <- fitPLM(data)
+
+par(mfrow=c(1,1))
+
+par(las=2)  # labels vertical
+NUSE(pset, main = "NUSE", ylim = c(0.91, 1.07))
+abline(h=1.05, lty= 5)
+# no samples have median > 1.05, so all of good quality
+
+par(pty="s")  # square images
+image(pset)
+image(pset, which = 33, main = "weights of sample 33")
+
+
+# -> exclude no samples
+```
+
+#_______ RMA ______
+```{r remove bad data, echo=TRUE}
+
+data0 <- data # used later for boxplot comarison before-after normalzation
+# rm(data)
+
+data.rma <- rma(data)
+data <- exprs(data.rma)
+# now data is ready to be analyzed
+dim(data)
+```
+
+```{r normalization plots, echo=TRUE}
+
+nbrs <- c("X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X13", "X4", "X15",  "X16",  "X17",  "X18",  "X19",  "X20",  "X21",  "X22",  "X23", "X24",  "X25", "X26",  "X27",  "X28",  "X29",  "X30",  "X31",  "X32",  "X33",  "X34", "X35",  "X36",  "X37",  "X38", "X39", "X40",  "X41",  "X42",  "X43",  "X44",  "X45",  "X46",  "X47",  "X48",  "X49",  "X50",  "X51",  "X52",  "X53",  "X54",  "X55",  "X56",  "X57",  "X58")
+colnames(data) <- nbrs
+
+
+par(mfrow=c(2,1))
+
+boxplot(data0, main = "boxplots before normalization", ylim = c(3,10))
+
+boxplot(data, main = "boxplots after normalization", , ylim = c(3,10))
+
+rm(data0)
+```
+
+```{r rename, echo=TRUE}
+
+targets <- read.table("Feld.txt", sep = "\t")
+
+targets <- targets[-c(48),] # GSM405338 (48th entry in targets) is in Feld.txt but not in data -> remove
+
+colnames(data) <- t(targets$V2)
+data[1,]
+```
+
+#_______ model fitting ______
+```{r design matrix, echo=TRUE}
+
+data.c <- data[, c(1,2,42,46,55,56,57,58)] # control
+data.g <- data[, -c(1,2,42,46,55,56,57,58)] # glioma
+
+P = integer(58)
+P[c(1,2,42,46,55,56,57,58)] <- c(1,1,1,1,1,1,1,1) # 1 for control, 0 for glioma
+
+design <- model.matrix(~ P)
+
+fit <- lmFit(data, design)
+fit <- eBayes(fit, trend = TRUE, robust = TRUE)
+results <- decideTests(fit)
+summary(results)
+
+DE <- topTable(fit, n = Inf, adjust.method = "BH", sort.by = "p")
+
+dim(DE[which(fit$p.value < 0.01),])
+summary(fit)
+
+dim(fit$p.value)   # -> 54675   2
+
+which(DE$adj.P.Val < 0.01) # -> 12490 values
+DE[12481:12500,]
+
+names <- row.names(DE)  # for volcano plot
+head(names)
+```
+
+#___________ plot of diff expr genes ______
+```{r table 50 DE genes, echo=TRUE}
+
+DE50 <- topTable(fit, n=50, adjust.method = "BH", sort.by = "p")
+
+xtable(DE50, digits = c(2,2,2,2,-2,-2,2))
+```
+
+```{r volcanoplot, echo=TRUE}
+
+# volcanoplot with B stat
+M <- fit$coefficients[,2] # coeff[,1] = intercept, coeff[,2] = P 
+Bstat <- fit$lods[,2] # lods = log odds of differential expression
+
+plot(M,Bstat,pch=".")
+abline(h=c(0,5,22.5),lty=c(1,2,3))
+abline(v=c(-2,2),lty=3)
+bigM <- (abs(M) > 2)
+bigB <- (Bstat > 25)
+points(M[bigM&!bigB],Bstat[bigM&!bigB],pch=16,col="green")
+points(M[bigB&!bigM],Bstat[bigB&!bigM],pch=16,col="magenta")
+points(M[bigM&bigB],Bstat[bigM&bigB],pch=16,col="blue")
+
+# volcano plot with mod t
+volcanoplot(fit, coef = 2, style = "p-value", highlight=50, names = names, main="volcano plot")
+abline(h=c(0,22.5),lty=c(3,3))
+
+```
+
+#_______ cluster analysis ______
+```{r cluster analysis, echo=TRUE}
+
+clust.av <- hclust(as.dist(1-cor(data.g)), method = "average")
+plot(clust.av)
+
+clust.com <- hclust(as.dist(1-cor(data.g)), method = "complete")
+plot(clust.com)
+
+clust.sing <- hclust(dist(t(data.g)), method = "single")
+plot(clust.sing)
+
+clust.WD <- hclust(as.dist(1-cor(data.g)), method = "ward.D")
+plot(clust.WD)
+
+agnes(as.dist(1-cor(data.g)), method = "average")$ac
+agnes(as.dist(1-cor(data.g)), method = "complete")$ac
+agnes(as.dist(1-cor(data.g)), method = "single")$ac
+agnes(as.dist(1-cor(data.g)), method = "ward")$ac
+
+# choose Ward's method. agnes agglomerative coefficient is highest.
+```
+
+```{r silhouette, echo=TRUE, fig.fullwidth=}
+
+# don't use all genes, since heatmap not interpretable otherwise -> only those with highest sd
+data.g.2 <- data.g[order(apply(data.g,1,sd), decreasing = "True"),] # order with highest sd first
+data.g.2 <- data.g.2[1:50,]   
+
+for (n in 2:44) {
+  clust.pam <- pam(data.g.2,n)
+plot(clust.pam, which.plots = 2)
+}
+
+```
+
+```{r heatmap, echo=TRUE}
+
+samples.WD <- as.dendrogram(hclust(as.dist(1-cor(data.g.2)), method = "ward.D"))
+genes.WD <- as.dendrogram(hclust(as.dist(1-cor(t(data.g.2))), method = "ward.D"))
+
+heatmap.2(data.g.2, genes.WD, samples.WD,  cexRow = 1, cexCol = 1, col = hcl.colors(30, palette = "Cividis"))
+
+``` 
